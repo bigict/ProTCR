@@ -40,9 +40,23 @@ if [ $# -eq 0 ]; then
   help 1
 fi
 
+############################
+echo "initialize db"
+############################
+db_dir=${CWD}/data/tcr_pmhc_db
+
+for c in "M" "P" "A" "B"; do
+  if [ ! -e ${data_dir}_${c}.fa ]; then
+    find ${db_dir}/fasta -name "*_${c}.fasta" -exec awk '$0!=""{print $0}' {} \; > ${db_dir}_${c}.fa;
+  fi
+done
+
+
 csv_file=$*
 
-# convert csv to fasta files
+############################
+echo "convert csv to fasta files"
+############################
 python ${CWD}/main.py csv_to_fasta \
     --target_uri "${output_dir}${output_params}" \
     --pid_prefix tcr_pmhc_test_ \
@@ -50,20 +64,23 @@ python ${CWD}/main.py csv_to_fasta \
     --verbose \
     ${csv_file}
 
-# make chain.idx
+############################
+echo "make chain.idx"
+############################
 cat ${output_dir}/mapping.idx_all | \
   cut -f2 | \
   awk -F _ '{printf("%s",$1);for (i=2;i<NF;++i) printf("_%s", $i); printf(" %s\n", $NF);}' | \
   sort -T . | \
   awk -f ${CWD}/scripts/collapse.awk  > ${output_dir}/chain.idx_all
 
-# filter out ones that has only one chain
-#   1. load dict a (in test dataset) from attr.idx_all
-#   2. filter out those that:
-#      i.  has no peptide
-#      ii. only have peptide & MHC and in dict a
-#      iii.has only one chain
-#
+############################
+echo "filter out ones that has only one chain"
+echo "  1. load dict a (in test dataset) from attr.idx_all"
+echo "  2. filter out those that:"
+echo "     i.  has no peptide"
+echo "     ii. only have peptide & MHC and in dict a"
+echo "     iii.has only one chain"
+############################
 cat ${output_dir}/chain.idx_all | \
   awk -v attr_idx=${output_dir}/attr.idx_all 'BEGIN{
       while(getline<attr_idx) {
@@ -84,7 +101,9 @@ cat ${output_dir}/chain.idx_all | \
         print $0;
     }' > ${output_dir}/chain.idx_all_blacklist
 
-# make attr.idx for test fold_i
+############################
+echo "make attr.idx"
+############################
 cat ${output_dir}/attr.idx_all | \
   awk -v blacklist=${output_dir}/chain.idx_all_blacklist 'BEGIN{
       a["xxxxxxxx"] = 1;
@@ -102,7 +121,9 @@ python ${CWD}/main.py attr_update_weight_and_task \
     --weight 1.0 \
     data/tcr_pmhc_db/attr.idx  >> ${output_dir}/attr.idx
 
-# build the dataset (test data included) mapping.idx and chain.idx
+############################
+echo "build the dataset: mapping.idx and chain.idx"
+############################
 cat ${CWD}/data/tcr_pmhc_db/mapping.idx ${output_dir}/mapping.idx_all > ${output_dir}/mapping.idx
 cat ${output_dir}/mapping.idx | \
   cut -f2 | \
@@ -111,7 +132,9 @@ cat ${output_dir}/mapping.idx | \
   awk -f ${CWD}/scripts/collapse.awk  > ${output_dir}/chain.idx
 
 
-# build fasta for each chain
+############################
+echo "build fasta for each chain"
+############################
 for c in "A" "B" "P" "M"; do
   python ${CWD}/main.py fasta_extract \
       --target_uri ${output_dir} \
@@ -123,14 +146,18 @@ for c in "A" "B" "P" "M"; do
   fi
 done
 
-# align A B M with jackhmmer
+############################
+echo "align chains A, B and M with jackhmmer"
+############################
 for c in "A" "B" "M"; do
   find ${CWD}/data/tcr_pmhc_db/fasta -name "*_${c}.fasta" > ${output_dir}/tcr_pmhc_db_${c}
   cat ${output_dir}/tcr_pmhc_db_${c} | ${CWD}/bin/mapred -m "uniref90_db=${output_dir}/tcr_pmhc_${c}.fa mgnify_db=${CWD}/data/tcr_pmhc_db_${c}.fa sh ${CWD}/scripts/run_jackhmmer.sh -o ${output_dir}/a3m" -c 10
   cat ${output_dir}/tcr_pmhc_db_${c} | ${CWD}/bin/mapred -m "PIPELINE_UNIREF_MAX_HITS=1000000 PIPELINE_MGNIFY_MAX_HITS=1000000 PIPELINE_DEDUPLICATE=0 sh ${CWD}/scripts/run_pipeline.sh -o ${output_dir}/a3m" -c 10
 done
 
-# align P with equal length
+############################
+echo "align chain P with equal length"
+############################
 python ${CWD}/main.py peptide_align \
   --output_dir ${output_dir}/a3m \
   --target_db ${output_dir}/tcr_pmhc_P.fa \
@@ -144,11 +171,13 @@ for c in "P"; do
 done
 
 # filter a3m with threshold=t
+############################
+echo "filter a3m (MHC): align_ratio>=${mhc_align_ratio_threshold}"
+############################
 if [ -d ${output_dir}/var ]; then
   rm -rf ${output_dir}/var
 fi
 
-echo "filter a3m (MHC): align_ratio>=${mhc_align_ratio_threshold}"
 cp -r ${output_dir}/a3m ${output_dir}/var
 python ${CWD}/main.py a3m_filter \
     --output_dir ${output_dir}/var \
@@ -156,7 +185,9 @@ python ${CWD}/main.py a3m_filter \
     --trim_gap \
     ${CWD}/data/tcr_pmhc_db/fasta/*_M.fasta
 
+############################
 echo "predict ${csv_file}"
+############################
 python main.py predict \
     ${model_args} \
     --output_dir ${output_dir}/pred \
